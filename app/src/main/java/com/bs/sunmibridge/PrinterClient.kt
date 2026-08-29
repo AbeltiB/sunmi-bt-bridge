@@ -19,9 +19,16 @@ import com.sunmi.peripheral.printer.SunmiPrinterService
  */
 class PrinterClient(private val appContext: Context) {
 
+    companion object {
+        private const val STATE_POLL_INTERVAL_MS = 15_000L
+    }
+
     @Volatile private var service: SunmiPrinterService? = null
 
     val isReady: Boolean get() = service != null
+
+    @Volatile private var pollingActive = false
+    private var pollingThread: Thread? = null
 
     private val connectCallback = object : InnerPrinterCallback() {
         override fun onConnected(s: SunmiPrinterService) {
@@ -31,11 +38,14 @@ class PrinterClient(private val appContext: Context) {
             try { s.printerInit(null) } catch (e: RemoteException) {
                 BridgeBus.log("printerInit failed: ${e.message}")
             }
+            startStatusPolling()
         }
 
         override fun onDisconnected() {
             service = null
             BridgeBus.setPrinterReady(false)
+            BridgeBus.setPrinterStatus("DISCONNECTED")
+            stopStatusPolling()
             BridgeBus.log("Printer service DISCONNECTED — will rebind")
             // Best-effort rebind; the OS re-broadcasts on service availability.
             try { bind() } catch (_: Exception) {}
@@ -62,11 +72,67 @@ class PrinterClient(private val appContext: Context) {
     }
 
     fun unbind() {
+        stopStatusPolling()
         try {
             InnerPrinterManager.getInstance().unBindService(appContext, connectCallback)
         } catch (_: Exception) {}
         service = null
         BridgeBus.setPrinterReady(false)
+        BridgeBus.setPrinterStatus("DISCONNECTED")
+    }
+
+    /**
+     * Polls [SunmiPrinterService.updatePrinterState] — the SDK's only status
+     * check, no push/broadcast API — so consumables issues (out of paper,
+     * cover open, cutter jam, overheat) show up in the log and the fleet
+     * heartbeat instead of silently stalling a print job. This is monitoring
+     * only: we don't replay bytes after a fault clears. The printer module
+     * buffers/resumes a stalled job at the firmware level on its own: retrying
+     * from the app side risks a duplicate print on top of whatever the
+     * firmware already finishes once paper is reinserted.
+     */
+    private fun startStatusPolling() {
+        if (pollingActive) return
+        pollingActive = true
+        pollingThread = Thread({
+            while (pollingActive) {
+                pollState()
+                try {
+                    Thread.sleep(STATE_POLL_INTERVAL_MS)
+                } catch (_: InterruptedException) {
+                    return@Thread
+                }
+            }
+        }, "printer-status-poll").also { it.start() }
+    }
+
+    private fun stopStatusPolling() {
+        pollingActive = false
+        pollingThread?.interrupt()
+        pollingThread = null
+    }
+
+    private fun pollState() {
+        val s = service ?: return
+        try {
+            BridgeBus.setPrinterStatus(describeState(s.updatePrinterState()))
+        } catch (_: RemoteException) {
+            // Transient — next poll retries.
+        }
+    }
+
+    private fun describeState(code: Int): String = when (code) {
+        1 -> "NORMAL"
+        2 -> "PREPARING"
+        3 -> "ABNORMAL_COMM"
+        4 -> "OUT_OF_PAPER"
+        5 -> "OVERHEATED"
+        6 -> "COVER_OPEN"
+        7 -> "CUTTER_ABNORMAL"
+        8 -> "CUTTER_RECOVERED"
+        9 -> "NO_BLACK_MARK"
+        505 -> "NOT_FOUND"
+        else -> "UNKNOWN($code)"
     }
 
     /**

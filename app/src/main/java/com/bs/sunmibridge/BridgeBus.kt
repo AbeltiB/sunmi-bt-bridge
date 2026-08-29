@@ -30,6 +30,8 @@ object BridgeBus {
         private set
     @Volatile var printerReady: Boolean = false
         private set
+    @Volatile var printerStatus: String = "UNKNOWN"
+        private set
     @Volatile var lastRemote: String = "-"
         private set
 
@@ -43,6 +45,15 @@ object BridgeBus {
 
     fun setPrinterReady(ready: Boolean) {
         printerReady = ready
+        main.post { onStateChanged?.invoke() }
+    }
+
+    /** Only logs on actual change, so a steady NORMAL doesn't spam the log
+     *  every 15s — but every transition (e.g. into/out of OUT_OF_PAPER) does. */
+    fun setPrinterStatus(status: String) {
+        if (status == printerStatus) return
+        printerStatus = status
+        log("Printer status: $status")
         main.post { onStateChanged?.invoke() }
     }
 

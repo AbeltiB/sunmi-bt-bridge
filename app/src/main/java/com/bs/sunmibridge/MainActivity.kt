@@ -75,7 +75,7 @@ class MainActivity : Activity() {
         val printer = if (BridgeBus.printerReady) "READY" else "not ready"
         statusView.text = buildString {
             append("Server:  ").append(s.name).append('\n')
-            append("Printer: ").append(printer).append('\n')
+            append("Printer: ").append(printer).append(" (").append(BridgeBus.printerStatus).append(")\n")
             append("Client:  ").append(BridgeBus.lastRemote)
         }
     }

@@ -111,6 +111,7 @@ class HeartbeatSender(private val context: Context) {
             "\"name\":\"${esc(name)}\"," +
             "\"serverState\":\"${BridgeBus.serverState.name}\"," +
             "\"printerReady\":${BridgeBus.printerReady}," +
+            "\"printerStatus\":\"${esc(BridgeBus.printerStatus)}\"," +
             "\"appVersion\":\"${esc(BuildConfig.VERSION_NAME)}\"" +
             "}"
     }
