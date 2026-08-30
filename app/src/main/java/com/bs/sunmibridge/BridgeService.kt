@@ -10,7 +10,9 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.os.PowerManager
 import java.io.ByteArrayOutputStream
 
@@ -35,6 +37,17 @@ class BridgeService : Service() {
         private const val CHANNEL_ID = "bridge"
         private const val NOTI_ID = 1
 
+        // How long to wait for the phone's Bluetooth socket to go quiet
+        // before treating whatever arrived as one complete print job. Phones
+        // split a single write into a different number/size of RFCOMM reads
+        // depending on their Bluetooth stack; forwarding each raw read as its
+        // own sendRAWData() call risked splitting a single ESC/POS command
+        // (seen in practice: the totals section printing as zeros on some
+        // phones but not others) across two calls. Coalescing removes that
+        // whole class of chunking bugs, at the cost of this small delay
+        // before printing starts.
+        private const val COALESCE_QUIET_MS = 50L
+
         @Volatile var isRunning = false
             private set
     }
@@ -46,6 +59,14 @@ class BridgeService : Service() {
     // Buffer bytes that arrive before the printer service is ready, then flush.
     private val pending = ByteArrayOutputStream()
     private val pendingLock = Any()
+
+    // Buffer raw Bluetooth reads until the socket goes quiet — see
+    // COALESCE_QUIET_MS above — then hand the whole assembled job to
+    // handleChunk() as a single call.
+    private val coalesceBuffer = ByteArrayOutputStream()
+    private val coalesceLock = Any()
+    private val coalesceHandler = Handler(Looper.getMainLooper())
+    private val flushCoalesced = Runnable { flushCoalescedBuffer() }
 
     override fun onCreate() {
         super.onCreate()
@@ -151,9 +172,29 @@ class BridgeService : Service() {
         }
     }
 
-    /** Handle a chunk from the phone: relay now, or buffer until printer ready. */
+    /**
+     * Raw bytes straight off the Bluetooth socket, one call per SppServer
+     * read() — NOT one call per print job. Accumulate and (re)schedule the
+     * quiet-period flush; see COALESCE_QUIET_MS.
+     */
     private fun onBytes(buf: ByteArray, len: Int) {
-        val chunk = buf.copyOf(len)
+        synchronized(coalesceLock) { coalesceBuffer.write(buf, 0, len) }
+        coalesceHandler.removeCallbacks(flushCoalesced)
+        coalesceHandler.postDelayed(flushCoalesced, COALESCE_QUIET_MS)
+    }
+
+    private fun flushCoalescedBuffer() {
+        val chunk: ByteArray
+        synchronized(coalesceLock) {
+            if (coalesceBuffer.size() == 0) return
+            chunk = coalesceBuffer.toByteArray()
+            coalesceBuffer.reset()
+        }
+        handleChunk(chunk)
+    }
+
+    /** A fully-assembled print job: relay now, or buffer until printer ready. */
+    private fun handleChunk(chunk: ByteArray) {
         if (printer.isReady) {
             flushPending()
             if (!printer.printRaw(chunk)) bufferChunk(chunk)
@@ -189,6 +230,7 @@ class BridgeService : Service() {
 
     override fun onDestroy() {
         BridgeBus.log("Bridge stopping")
+        coalesceHandler.removeCallbacks(flushCoalesced)
         server?.stop()
         printer.unbind()
         heartbeat.stop()
