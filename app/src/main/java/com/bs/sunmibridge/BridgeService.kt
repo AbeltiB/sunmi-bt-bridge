@@ -46,7 +46,15 @@ class BridgeService : Service() {
         // phones but not others) across two calls. Coalescing removes that
         // whole class of chunking bugs, at the cost of this small delay
         // before printing starts.
-        private const val COALESCE_QUIET_MS = 50L
+        //
+        // 50ms fixed the general case but NOT lower-spec devices (reported:
+        // still zero on Tecno phones) — widened to 200ms as those devices'
+        // app-side processing between writes plausibly exceeds 50ms. See the
+        // "Job received" log line below for the diagnostic that will tell us
+        // for certain whether that's the cause, or whether the incoming
+        // bytes already contain zero (i.e. a bug in the sending app, not
+        // something a coalescing window can fix).
+        private const val COALESCE_QUIET_MS = 200L
 
         @Volatile var isRunning = false
             private set
@@ -195,6 +203,7 @@ class BridgeService : Service() {
 
     /** A fully-assembled print job: relay now, or buffer until printer ready. */
     private fun handleChunk(chunk: ByteArray) {
+        BridgeBus.log("Job received: ${chunk.size}B — \"${printablePreview(chunk)}\"")
         if (printer.isReady) {
             flushPending()
             if (!printer.printRaw(chunk)) bufferChunk(chunk)
@@ -202,6 +211,24 @@ class BridgeService : Service() {
             bufferChunk(chunk)
             BridgeBus.log("Printer not ready — buffered ${chunk.size}B")
         }
+    }
+
+    /**
+     * Renders a job's bytes as printable ASCII (control/binary bytes shown as
+     * '.') so the on-screen Log / logcat can be read directly to check
+     * whether e.g. "0.00" was already present in what the phone sent, versus
+     * a correct value that went wrong later. Diagnostic only — this is what
+     * lets us tell a bridge-side chunking bug apart from a sending-app bug.
+     */
+    private fun printablePreview(data: ByteArray, maxLen: Int = 400): String {
+        val sb = StringBuilder()
+        val n = minOf(data.size, maxLen)
+        for (i in 0 until n) {
+            val b = data[i].toInt() and 0xFF
+            sb.append(if (b in 32..126) b.toChar() else '.')
+        }
+        if (data.size > maxLen) sb.append('…')
+        return sb.toString()
     }
 
     private fun bufferChunk(chunk: ByteArray) {
