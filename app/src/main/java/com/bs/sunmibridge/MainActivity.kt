@@ -1,15 +1,19 @@
 package com.bs.sunmibridge
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.bluetooth.BluetoothAdapter
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import android.view.Menu
+import android.view.MenuItem
 import android.widget.Button
 import android.widget.EditText
 import android.widget.ScrollView
 import android.widget.TextView
+import java.util.Calendar
 
 /**
  * Single-screen control panel. This is infrastructure, not a product UI:
@@ -68,6 +72,28 @@ class MainActivity : Activity() {
         BridgeBus.onLog = null
         BridgeBus.onStateChanged = null
         super.onDestroy()
+    }
+
+    override fun onCreateOptionsMenu(menu: Menu): Boolean {
+        menuInflater.inflate(R.menu.main_menu, menu)
+        return true
+    }
+
+    override fun onOptionsItemSelected(item: MenuItem): Boolean {
+        if (item.itemId == R.id.action_about) {
+            showAboutDialog()
+            return true
+        }
+        return super.onOptionsItemSelected(item)
+    }
+
+    private fun showAboutDialog() {
+        val year = Calendar.getInstance().get(Calendar.YEAR)
+        AlertDialog.Builder(this)
+            .setTitle(getString(R.string.app_name))
+            .setMessage("Developed by BS Tech\nDigital Ticketing System\n\n© $year")
+            .setPositiveButton("OK", null)
+            .show()
     }
 
     private fun renderStatus() {

@@ -152,6 +152,22 @@ class PrinterClient(private val appContext: Context) {
     }
 
     /**
+     * Extra blank feed after a job, so the last thing printed (often a QR
+     * code) fully clears the cutter/tear bar instead of being sliced or torn
+     * through. The phone app's own ESC/POS stream ends right after its
+     * content with no guaranteed trailing margin — this adds one on our side
+     * regardless of what the app sent.
+     */
+    fun feedExtra(lines: Int = 4) {
+        val s = service ?: return
+        try {
+            s.lineWrap(lines, resultCallback)
+        } catch (e: RemoteException) {
+            BridgeBus.log("feedExtra failed: ${e.message}")
+        }
+    }
+
+    /**
      * Self-test that exercises the printer path WITHOUT any Bluetooth, so we
      * can prove the SUNMI side works on its own (Milestone 1).
      * @param widthMm 58 or 80 — only affects the divider width in the test slip.

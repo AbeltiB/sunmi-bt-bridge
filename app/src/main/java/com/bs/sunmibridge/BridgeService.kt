@@ -206,7 +206,11 @@ class BridgeService : Service() {
         BridgeBus.log("Job received: ${chunk.size}B — \"${printablePreview(chunk)}\"")
         if (printer.isReady) {
             flushPending()
-            if (!printer.printRaw(chunk)) bufferChunk(chunk)
+            if (printer.printRaw(chunk)) {
+                printer.feedExtra() // breathing room so a trailing QR code isn't cut off
+            } else {
+                bufferChunk(chunk)
+            }
         } else {
             bufferChunk(chunk)
             BridgeBus.log("Printer not ready — buffered ${chunk.size}B")
