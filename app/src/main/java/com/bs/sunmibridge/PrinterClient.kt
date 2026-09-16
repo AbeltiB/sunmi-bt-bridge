@@ -157,8 +157,13 @@ class PrinterClient(private val appContext: Context) {
      * through. The phone app's own ESC/POS stream ends right after its
      * content with no guaranteed trailing margin — this adds one on our side
      * regardless of what the app sent.
+     *
+     * 4 lines was confirmed too little in the field (QR code still landing
+     * right at the tear edge, zero margin) — bumped to 10. If this is still
+     * not enough, or starts wasting a visibly excessive amount of paper on a
+     * normal ticket, this is the number to retune.
      */
-    fun feedExtra(lines: Int = 4) {
+    fun feedExtra(lines: Int = 10) {
         val s = service ?: return
         try {
             s.lineWrap(lines, resultCallback)
