@@ -21,6 +21,16 @@ class PrinterClient(private val appContext: Context) {
 
     companion object {
         private const val STATE_POLL_INTERVAL_MS = 15_000L
+
+        // How long after the last print command to keep skipping status
+        // polls. SUNMI's printer service almost certainly processes commands
+        // through one sequential queue for the one physical print head — a
+        // status query landing mid-job makes that job's remaining bytes wait
+        // behind it. Reported symptom (first print fine, later ones
+        // progressively slower) matches this exactly: no poll has fired yet
+        // right after Start, but by the 2nd/3rd print the 15s timer has had
+        // more chances to land mid-job.
+        private const val POLL_QUIET_AFTER_PRINT_MS = 5_000L
     }
 
     @Volatile private var service: SunmiPrinterService? = null
@@ -29,6 +39,11 @@ class PrinterClient(private val appContext: Context) {
 
     @Volatile private var pollingActive = false
     private var pollingThread: Thread? = null
+    @Volatile private var busyUntilMs: Long = 0
+
+    private fun markBusy() {
+        busyUntilMs = System.currentTimeMillis() + POLL_QUIET_AFTER_PRINT_MS
+    }
 
     private val connectCallback = object : InnerPrinterCallback() {
         override fun onConnected(s: SunmiPrinterService) {
@@ -113,6 +128,7 @@ class PrinterClient(private val appContext: Context) {
     }
 
     private fun pollState() {
+        if (System.currentTimeMillis() < busyUntilMs) return // don't queue behind an active print
         val s = service ?: return
         try {
             BridgeBus.setPrinterStatus(describeState(s.updatePrinterState()))
@@ -142,6 +158,7 @@ class PrinterClient(private val appContext: Context) {
      */
     fun printRaw(data: ByteArray): Boolean {
         val s = service ?: return false
+        markBusy()
         return try {
             s.sendRAWData(data, resultCallback)
             true
@@ -159,12 +176,14 @@ class PrinterClient(private val appContext: Context) {
      * regardless of what the app sent.
      *
      * 4 lines was confirmed too little in the field (QR code still landing
-     * right at the tear edge, zero margin) — bumped to 10. If this is still
-     * not enough, or starts wasting a visibly excessive amount of paper on a
-     * normal ticket, this is the number to retune.
+     * right at the tear edge, zero margin); 10 was still not quite enough.
+     * Bumped to 15. If this is still not enough, or starts wasting a visibly
+     * excessive amount of paper on a normal ticket, this is the number to
+     * retune.
      */
-    fun feedExtra(lines: Int = 10) {
+    fun feedExtra(lines: Int = 15) {
         val s = service ?: return
+        markBusy()
         try {
             s.lineWrap(lines, resultCallback)
         } catch (e: RemoteException) {
@@ -183,6 +202,7 @@ class PrinterClient(private val appContext: Context) {
             BridgeBus.log("TEST PRINT skipped — printer not ready")
             return
         }
+        markBusy()
         try {
             s.printerInit(null)
             s.setAlignment(1, null) // center
